@@ -1,4 +1,5 @@
 import logging
+import re
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -44,6 +45,12 @@ def recent_yyyymm_threshold() -> str:
     now = datetime.now(ZoneInfo("Asia/Tokyo"))
     first_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     return (first_of_month - relativedelta(months=EPRX_RECENT_MONTHS - 1)).strftime("%Y%m")
+
+
+_RESULT_ARCHIVE_RE = re.compile(
+    r"^(?P<period>\d{4,6})_(?P<code>[\d]+-[\d]+)_result\.(?P<ext>zip|csv)$",
+    re.IGNORECASE,
+)
 
 
 def _decode_csv(raw_bytes: bytes) -> str:
@@ -172,24 +179,31 @@ def parse_eprx_csv(raw_bytes: bytes, product_code: str | None = None) -> pd.Data
 
 
 def _iter_result_sources(product_code: str):
-    """Yield (yyyymm, raw_bytes) for result archives only — no prompt fallback."""
-    seen: set[str] = set()
-    patterns = (
-        f"*_{product_code}_result.csv",
-        f"*_{product_code}_result.zip",
-    )
-    for pattern in patterns:
-        for path in sorted(EPRX_DIR.glob(pattern)):
-            yyyymm = path.name[:6]
-            if not yyyymm.isdigit() or yyyymm in seen:
-                continue
-            seen.add(yyyymm)
-            if path.suffix == ".csv":
-                yield yyyymm, path.read_bytes()
-            else:
-                with zipfile.ZipFile(path) as zf:
-                    for csv_name in sorted(n for n in zf.namelist() if n.endswith(".csv")):
-                        yield yyyymm, zf.read(csv_name)
+    """
+    Yield (period, raw_bytes) from flat archives in EPRX_DIR.
+
+    Expected layout (no subfolders):
+      {year}_{product_code}_result.zip   e.g. 2025_1-1_result.zip
+      {yyyymm}_{product_code}_result.zip e.g. 202506_1-0_result.zip
+    Each zip contains one or more CSV files with 確報値 data.
+    """
+    for path in sorted(EPRX_DIR.iterdir()):
+        if not path.is_file():
+            continue
+        match = _RESULT_ARCHIVE_RE.match(path.name)
+        if not match or match.group("code") != product_code:
+            continue
+
+        period = match.group("period")
+        ext = match.group("ext").lower()
+
+        if ext == "csv":
+            yield period, path.read_bytes()
+            continue
+
+        with zipfile.ZipFile(path) as zf:
+            for csv_name in sorted(n for n in zf.namelist() if n.lower().endswith(".csv")):
+                yield period, zf.read(csv_name)
 
 
 def load_eprx_product(product_code: str) -> pd.DataFrame:
@@ -201,7 +215,7 @@ def load_eprx_product(product_code: str) -> pd.DataFrame:
     never used as fallback.
     """
     dfs: list[pd.DataFrame] = []
-    for yyyymm, raw in _iter_result_sources(product_code):
+    for period, raw in _iter_result_sources(product_code):
         df = parse_eprx_csv(raw, product_code=product_code)
         dfs.append(df)
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
