@@ -221,8 +221,6 @@ def load_eprx_product(product_code: str) -> pd.DataFrame:
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
 
-EPRX_AREAS = ("北海道", "東北", "東京", "中部", "北陸", "関西", "中国", "四国", "九州")
-
 _REQ_ARCHIVE_RE = re.compile(r"^(?P<fiscal_year>\d{4})_Requirement_archive\.zip$", re.IGNORECASE)
 _REQ_COMPOUND_RE = re.compile(
     r"^(?P<fiscal_year>\d{4})_(?P<table>Requirement|AdditionalRequirement)_(?P<update>\d{8})(?:\((?P<effective>\d{8})\))?\.csv$",
